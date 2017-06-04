@@ -3,8 +3,6 @@ package br.com.tairoroberto.bondedospoiler
 import android.Manifest.permission.READ_CONTACTS
 import android.animation.Animator
 import android.animation.AnimatorListenerAdapter
-import android.annotation.TargetApi
-import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -20,9 +18,7 @@ import android.util.Log
 import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.widget.TextView
-import android.widget.Toast
 import com.facebook.*
-import com.facebook.login.DefaultAudience
 import com.facebook.login.LoginManager
 import com.facebook.login.LoginResult
 import com.facebook.share.ShareApi
@@ -30,8 +26,8 @@ import com.facebook.share.Sharer
 import com.facebook.share.model.ShareLinkContent
 import com.facebook.share.model.SharePhoto
 import com.facebook.share.model.SharePhotoContent
+import com.facebook.share.widget.ShareDialog
 import kotlinx.android.synthetic.main.activity_login.*
-import org.json.JSONException
 import java.util.*
 import kotlin.collections.ArrayList
 
@@ -51,6 +47,12 @@ class LoginActivity : AppCompatActivity() {
     private var pendingAction = PendingAction.NONE
     private val PERMISSION = "publish_actions"
     private var canPresentShareDialogWithPhotos: Boolean = false
+    private var canPresentShareDialog: Boolean = false
+    private var shareDialog: ShareDialog? = null
+    private var profileTracker: ProfileTracker? = null
+
+    private val PENDING_ACTION_BUNDLE_KEY = "br.com.tairoroberto.bondedospoiler:PendingAction"
+
 
     private val shareCallback = object : FacebookCallback<Sharer.Result> {
         override fun onCancel() {
@@ -93,6 +95,56 @@ class LoginActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_login)
 
+        callbackManager = CallbackManager.Factory.create()
+
+        loginButton.registerCallback(callbackManager,
+                object : FacebookCallback<LoginResult> {
+                    override fun onSuccess(loginResult: LoginResult) {
+                        handlePendingAction()
+                        updateUI()
+                    }
+
+                    override fun onCancel() {
+                        if (pendingAction != PendingAction.NONE) {
+                            showAlert()
+                            pendingAction = PendingAction.NONE
+                        }
+                        updateUI()
+                    }
+
+                    override fun onError(exception: FacebookException) {
+                        if (pendingAction != PendingAction.NONE && exception is FacebookAuthorizationException) {
+                            showAlert()
+                            pendingAction = PendingAction.NONE
+                        }
+                        updateUI()
+                    }
+
+                    private fun showAlert() {
+                        AlertDialog.Builder(this@LoginActivity)
+                                .setTitle("Canclado")
+                                .setMessage("Seem peermissão")
+                                .setPositiveButton("OK", null)
+                                .show()
+                    }
+                })
+
+        shareDialog = ShareDialog(this)
+        shareDialog?.registerCallback(callbackManager, shareCallback)
+
+        if (savedInstanceState != null) {
+            val name = savedInstanceState.getString(PENDING_ACTION_BUNDLE_KEY)
+            pendingAction = PendingAction.valueOf(name)
+        }
+
+        object : ProfileTracker() {
+            override fun onCurrentProfileChanged(
+                    oldProfile: Profile?,
+                    currentProfile: Profile?) {
+                updateUI()
+            }
+        }
+
         passwordView.editText?.setOnEditorActionListener(TextView.OnEditorActionListener { _, id, _ ->
             if (id == R.id.emailView || id == EditorInfo.IME_NULL) {
                 attemptLogin()
@@ -102,54 +154,17 @@ class LoginActivity : AppCompatActivity() {
         })
         //emailSignInButton.setOnClickListener { attemptLogin() }
 
-        callbackManager = CallbackManager.Factory.create()
         mayRequestContacts()
 
-        emailSignInButton.setOnClickListener(View.OnClickListener {
-            /*if (!isLoggedIn()) {
-                Toast.makeText(this@LoginActivity, "Não logado", Toast.LENGTH_LONG).show()
-                return@OnClickListener
-            }
-            val callback = GraphRequest.Callback { response ->
-                try {
-                    if (response.error != null) {
-                        Toast.makeText(this@LoginActivity, "Falha ao deslogar",Toast.LENGTH_LONG).show()
-                    } else if (response.jsonObject.getBoolean(SUCCESS)) {
-                        LoginManager.getInstance().logOut()
-                        // updateUI();?
-                    }
-                } catch (ex: JSONException) { /* no op */
-                }
-            }
-            val request = GraphRequest(AccessToken.getCurrentAccessToken(), GRAPH_PATH, Bundle(), HttpMethod.DELETE, callback)
-            request.executeAsync()*/
+        emailSignInButton.setOnClickListener({
             onClickPostPhoto()
         })
 
-        // Callback registration
-        loginButton.registerCallback(callbackManager, object : FacebookCallback<LoginResult> {
-            override fun onSuccess(loginResult: LoginResult) {
-                // App code
-                Toast.makeText(this@LoginActivity, "Sucsso", Toast.LENGTH_LONG).show()
-                updateUI()
-            }
+        // Can we present the share dialog for regular links?
+        canPresentShareDialog = ShareDialog.canShow(ShareLinkContent::class.java)
 
-            override fun onCancel() {
-                // App code
-                Toast.makeText(this@LoginActivity, "Cancelado", Toast.LENGTH_LONG).show()
-            }
-
-            override fun onError(exception: FacebookException) {
-                // App code
-                Toast.makeText(this@LoginActivity, "Erro ao logar", Toast.LENGTH_LONG).show()
-            }
-        })
-
-
-        perms.setOnClickListener {
-            val selectPermsIntent = Intent(this@LoginActivity, PermissionSelectActivity::class.java)
-            startActivityForResult(selectPermsIntent, PICK_PERMS_REQUEST)
-        }
+        // Can we present the share dialog for photos?
+        canPresentShareDialogWithPhotos = ShareDialog.canShow(SharePhotoContent::class.java)
     }
 
 
@@ -181,6 +196,20 @@ class LoginActivity : AppCompatActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        updateUI()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        profileTracker?.stopTracking()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putString(PENDING_ACTION_BUNDLE_KEY, pendingAction.name)
+    }
 
     /**
      * Attempts to sign in or register the account specified by the login form.
@@ -313,16 +342,10 @@ class LoginActivity : AppCompatActivity() {
     }
 
     companion object {
-
         /**
          * Id to identity READ_CONTACTS permission request.
          */
         private val REQUEST_READ_CONTACTS = 0
-
-        /**
-         * A dummy authentication store containing known user names and passwords.
-         * TODO: remove after connecting to a real authentication system.
-         */
         private val DUMMY_CREDENTIALS = arrayOf("tairoroberto@gmail.com:123456", "teste@gmail.com.com:123456")
     }
 
@@ -338,54 +361,13 @@ class LoginActivity : AppCompatActivity() {
             userName.text = String.format("%s %s", profile.firstName, profile.lastName)
         } else {
             userPicture.profileId = null
-            userName.text = "Bem vindo"
+            userName.text = "Welcome"
         }
     }
 
-    override fun onActivityResult(
-            requestCode: Int,
-            resultCode: Int,
-            data: Intent) {
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == PICK_PERMS_REQUEST) {
-            if (resultCode == Activity.RESULT_OK) {
-                val readPermsArr = data
-                        .getStringArrayExtra(PermissionSelectActivity.EXTRA_SELECTED_READ_PARAMS)
-                val writePrivacy = data
-                        .getStringExtra(PermissionSelectActivity.EXTRA_SELECTED_WRITE_PRIVACY)
-                val publishPermsArr = data
-                        .getStringArrayExtra(
-                                PermissionSelectActivity.EXTRA_SELECTED_PUBLISH_PARAMS)
-
-                loginButton?.clearPermissions()
-
-                if (readPermsArr != null) {
-                    if (readPermsArr.isNotEmpty()) {
-                        loginButton?.setReadPermissions(*readPermsArr)
-                    }
-                }
-
-                if ((readPermsArr == null || readPermsArr.isEmpty()) && publishPermsArr != null) {
-                    if (publishPermsArr.isNotEmpty()) {
-                        loginButton?.setPublishPermissions(*publishPermsArr)
-                    }
-                }
-                // Set write privacy for the user
-                if (writePrivacy != null) {
-                    val audience: DefaultAudience
-                    if (DefaultAudience.EVERYONE.toString() == writePrivacy) {
-                        audience = DefaultAudience.EVERYONE
-                    } else if (DefaultAudience.FRIENDS.toString() == writePrivacy) {
-                        audience = DefaultAudience.FRIENDS
-                    } else {
-                        audience = DefaultAudience.ONLY_ME
-                    }
-                    loginButton?.defaultAudience = audience
-                }
-            }
-        } else {
-            callbackManager?.onActivityResult(requestCode, resultCode, data)
-        }
+        callbackManager?.onActivityResult(requestCode, resultCode, data)
     }
 
     private fun hasPublishPermission(): Boolean {
@@ -399,9 +381,8 @@ class LoginActivity : AppCompatActivity() {
 
     private fun postStatusUpdate() {
         val profile = Profile.getCurrentProfile()
-        val listPeople:MutableList<String> = ArrayList()
-
-        listPeople.add(0,"691329721")
+        val listPeople = ArrayList<String>()
+        listPeople.add("691329721")
 
         val linkContent = ShareLinkContent.Builder()
                 .setContentTitle("Hello Facebook")
@@ -441,13 +422,22 @@ class LoginActivity : AppCompatActivity() {
     }
 
     private fun postPhoto() {
-        val image = BitmapFactory.decodeResource(this.resources, R.mipmap.ic_launcher)
+        val image = BitmapFactory.decodeResource(this.resources, R.drawable.logan)
         val sharePhoto = SharePhoto.Builder().setBitmap(image).build()
         val photos = ArrayList<SharePhoto>()
         photos.add(sharePhoto)
 
-        val sharePhotoContent = SharePhotoContent.Builder().setPhotos(photos).build()
-        if (hasPublishPermission()) {
+        val profile = Profile.getCurrentProfile()
+        val listPeople = ArrayList<String>()
+        listPeople.add("538273729")
+
+        val sharePhotoContent = SharePhotoContent.Builder()
+                .setPhotos(photos)
+                .setContentUrl(Uri.parse("http://developers.facebook.com/docs/android"))
+                .setPeopleIds(listPeople)
+                .build()
+
+        if (profile != null && hasPublishPermission()) {
             ShareApi.share(sharePhotoContent, shareCallback)
         } else {
             pendingAction = PendingAction.POST_PHOTO
