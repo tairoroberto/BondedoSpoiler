@@ -8,19 +8,15 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.net.Uri
-import android.os.AsyncTask
 import android.os.Build
 import android.os.Bundle
 import android.support.design.widget.Snackbar
 import android.support.v7.app.AppCompatActivity
-import android.text.TextUtils
 import android.util.Log
 import android.view.View
-import android.view.inputmethod.EditorInfo
-import android.widget.TextView
+import android.widget.Toast
 import com.facebook.*
 import com.facebook.login.LoginManager
-import com.facebook.login.LoginResult
 import com.facebook.share.ShareApi
 import com.facebook.share.Sharer
 import com.facebook.share.model.ShareLinkContent
@@ -28,6 +24,7 @@ import com.facebook.share.model.SharePhoto
 import com.facebook.share.model.SharePhotoContent
 import com.facebook.share.widget.ShareDialog
 import kotlinx.android.synthetic.main.activity_login.*
+import org.json.JSONException
 import java.util.*
 import kotlin.collections.ArrayList
 
@@ -38,7 +35,6 @@ class LoginActivity : AppCompatActivity() {
     /**
      * Keep track of the login task to ensure we can cancel it if requested.
      */
-    private var mAuthTask: UserLoginTask? = null
     private var callbackManager: CallbackManager? = null
 
     private val GRAPH_PATH = "me/permissions"
@@ -50,6 +46,7 @@ class LoginActivity : AppCompatActivity() {
     private var canPresentShareDialog: Boolean = false
     private var shareDialog: ShareDialog? = null
     private var profileTracker: ProfileTracker? = null
+    private val REQUEST_CODE_PICK_WHATSAPP = 2
 
     private val PENDING_ACTION_BUNDLE_KEY = "br.com.tairoroberto.bondedospoiler:PendingAction"
 
@@ -82,6 +79,7 @@ class LoginActivity : AppCompatActivity() {
                     .setMessage(alertMessage)
                     .setPositiveButton("OK", null)
                     .show()
+            showProgress(false)
         }
     }
 
@@ -96,39 +94,6 @@ class LoginActivity : AppCompatActivity() {
         setContentView(R.layout.activity_login)
 
         callbackManager = CallbackManager.Factory.create()
-
-        loginButton.registerCallback(callbackManager,
-                object : FacebookCallback<LoginResult> {
-                    override fun onSuccess(loginResult: LoginResult) {
-                        handlePendingAction()
-                        updateUI()
-                    }
-
-                    override fun onCancel() {
-                        if (pendingAction != PendingAction.NONE) {
-                            showAlert()
-                            pendingAction = PendingAction.NONE
-                        }
-                        updateUI()
-                    }
-
-                    override fun onError(exception: FacebookException) {
-                        if (pendingAction != PendingAction.NONE && exception is FacebookAuthorizationException) {
-                            showAlert()
-                            pendingAction = PendingAction.NONE
-                        }
-                        updateUI()
-                    }
-
-                    private fun showAlert() {
-                        AlertDialog.Builder(this@LoginActivity)
-                                .setTitle("Canclado")
-                                .setMessage("Seem peermissão")
-                                .setPositiveButton("OK", null)
-                                .show()
-                    }
-                })
-
         shareDialog = ShareDialog(this)
         shareDialog?.registerCallback(callbackManager, shareCallback)
 
@@ -145,19 +110,28 @@ class LoginActivity : AppCompatActivity() {
             }
         }
 
-        passwordView.editText?.setOnEditorActionListener(TextView.OnEditorActionListener { _, id, _ ->
-            if (id == R.id.emailView || id == EditorInfo.IME_NULL) {
-                attemptLogin()
-                return@OnEditorActionListener true
-            }
-            false
-        })
-        //emailSignInButton.setOnClickListener { attemptLogin() }
-
         mayRequestContacts()
 
         emailSignInButton.setOnClickListener({
+            if( isLoggedIn() ) {
+                val callback = GraphRequest.Callback { response ->
+                    try {
+                        if (response.error != null) {
+                            Toast.makeText(this, "Falha ao deslogar", Toast.LENGTH_LONG).show()
+                        } else if (response.jsonObject.getBoolean(SUCCESS)) {
+                            LoginManager.getInstance().logOut()
+                        }
+                    } catch (ex: JSONException) { }
+                }
+                val request = GraphRequest(AccessToken.getCurrentAccessToken(), GRAPH_PATH, Bundle(), HttpMethod.DELETE, callback)
+                request.executeAsync()
+            }else{
+                LoginManager.getInstance().logInWithPublishPermissions(this, Arrays.asList<String>(PERMISSION))
+            }
+        })
+        postButton.setOnClickListener({
             onClickPostPhoto()
+            showProgress(true)
         })
 
         // Can we present the share dialog for regular links?
@@ -165,6 +139,35 @@ class LoginActivity : AppCompatActivity() {
 
         // Can we present the share dialog for photos?
         canPresentShareDialogWithPhotos = ShareDialog.canShow(SharePhotoContent::class.java)
+
+
+        /*val c : Cursor = contentResolver.query(
+        ContactsContract.RawContacts.CONTENT_URI, arrayOf(ContactsContract.RawContacts.CONTACT_ID, ContactsContract.RawContacts.DISPLAY_NAME_PRIMARY),
+        ContactsContract.RawContacts.ACCOUNT_TYPE + "= ?", arrayOf("com.whatsapp"), null)
+
+        val myWhatsappContacts : ArrayList<String>  = ArrayList()
+        val contactNameColumn = c.getColumnIndex(ContactsContract.RawContacts.DISPLAY_NAME_PRIMARY)
+        val contactNameColumnNumber = c.getColumnIndex(ContactsContract.RawContacts.DATA_SET)
+        while (c.moveToNext()) {
+            myWhatsappContacts.add(c.getString(contactNameColumn))
+        }
+        Log.i("LOG","myWhatsappContacts: $myWhatsappContacts" )
+        Log.i("LOG","myWhatsappContacts Numbers: $contactNameColumnNumber" )
+
+
+        val intent:Intent  = Intent(Intent.ACTION_PICK)
+        intent.`package` = "com.whatsapp"
+        try{
+            startActivityForResult(intent, REQUEST_CODE_PICK_WHATSAPP)
+        } catch (e:Exception) {
+            Toast.makeText(this, "Whattsapp não instalado", Toast.LENGTH_SHORT).show()
+        }
+
+        val sendIntent:Intent = Intent("android.intent.action.MAIN");
+        sendIntent.component = ComponentName("com.whatsapp", "com.whatsapp.Conversation")
+        sendIntent.putExtra("jid", PhoneNumberUtils.stripSeparators("+5511972781404") + "@s.whatsapp.net")
+        startActivity(sendIntent)*/
+
     }
 
 
@@ -176,10 +179,10 @@ class LoginActivity : AppCompatActivity() {
             return true
         }
         if (shouldShowRequestPermissionRationale(READ_CONTACTS)) {
-            Snackbar.make(passwordView, R.string.permission_rationale, Snackbar.LENGTH_INDEFINITE)
-                    .setAction(android.R.string.ok, { requestPermissions(arrayOf(READ_CONTACTS), REQUEST_READ_CONTACTS) })
+            Snackbar.make(emailLoginForm, R.string.permission_rationale, Snackbar.LENGTH_INDEFINITE)
+                    .setAction(android.R.string.ok, { requestPermissions(arrayOf(READ_CONTACTS), PICK_PERMS_REQUEST) })
         } else {
-            requestPermissions(arrayOf(READ_CONTACTS), REQUEST_READ_CONTACTS)
+            requestPermissions(arrayOf(READ_CONTACTS), PICK_PERMS_REQUEST)
         }
         return false
     }
@@ -189,7 +192,7 @@ class LoginActivity : AppCompatActivity() {
      */
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>,
                                             grantResults: IntArray) {
-        if (requestCode == REQUEST_READ_CONTACTS) {
+        if (requestCode == PICK_PERMS_REQUEST) {
             if (grantResults.size == 1 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
                 // populateAutoComplete()
             }
@@ -209,68 +212,6 @@ class LoginActivity : AppCompatActivity() {
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         outState.putString(PENDING_ACTION_BUNDLE_KEY, pendingAction.name)
-    }
-
-    /**
-     * Attempts to sign in or register the account specified by the login form.
-     * If there are form errors (invalid email, missing fields, etc.), the
-     * errors are presented and no actual login attempt is made.
-     */
-    private fun attemptLogin() {
-        if (mAuthTask != null) {
-            return
-        }
-
-        // Reset errors.
-        emailView.error = null
-        passwordView.error = null
-
-        // Store values at the time of the login attempt.
-        val email = emailView.editText?.text.toString()
-        val password = passwordView.editText?.text.toString()
-
-        var cancel = false
-        var focusView: View? = null
-
-        // Check for a valid password, if the user entered one.
-        if (!TextUtils.isEmpty(password) && !isPasswordValid(password)) {
-            passwordView.error = getString(R.string.error_invalid_password)
-            focusView = passwordView
-            cancel = true
-        }
-
-        // Check for a valid email address.
-        if (TextUtils.isEmpty(email)) {
-            emailView.error = getString(R.string.error_field_required)
-            focusView = emailView
-            cancel = true
-        } else if (!isEmailValid(email)) {
-            emailView.error = getString(R.string.error_invalid_email)
-            focusView = emailView
-            cancel = true
-        }
-
-        if (cancel) {
-            // There was an error; don't attempt login and focus the first
-            // form field with an error.
-            focusView?.requestFocus()
-        } else {
-            // Show a progress spinner, and kick off a background task to
-            // perform the user login attempt.
-            showProgress(true)
-            mAuthTask = UserLoginTask(email, password)
-            mAuthTask!!.execute(null as Void?)
-        }
-    }
-
-    private fun isEmailValid(email: String): Boolean {
-        //TODO: Replace this with your own logic
-        return email.contains("@")
-    }
-
-    private fun isPasswordValid(password: String): Boolean {
-        //TODO: Replace this with your own logic
-        return password.length > 4
     }
 
     /**
@@ -296,59 +237,6 @@ class LoginActivity : AppCompatActivity() {
         })
     }
 
-    /**
-     * Represents an asynchronous login/registration task used to authenticate
-     * the user.
-     */
-    inner class UserLoginTask internal constructor(private val mEmail: String, private val mPassword: String) : AsyncTask<Void, Void, Boolean>() {
-
-        override fun doInBackground(vararg params: Void): Boolean? {
-            // TODO: attempt authentication against a network service.
-
-            try {
-                // Simulate network access.
-                Thread.sleep(2000)
-            } catch (e: InterruptedException) {
-                return false
-            }
-
-            // TODO: register the new account here.
-            return DUMMY_CREDENTIALS
-                    .map { credential -> credential.split(":".toRegex()).dropLastWhile { it.isEmpty() }.toTypedArray() }
-                    .firstOrNull { it[0] == mEmail }
-                    ?.let {
-                        // Account exists, return true if the password matches.
-                        it[1] == mPassword
-                    }
-                    ?: true
-        }
-
-        override fun onPostExecute(success: Boolean?) {
-            mAuthTask = null
-            showProgress(false)
-
-            if (success!!) {
-                finish()
-            } else {
-                passwordView.error = getString(R.string.error_incorrect_password)
-                passwordView.requestFocus()
-            }
-        }
-
-        override fun onCancelled() {
-            mAuthTask = null
-            showProgress(false)
-        }
-    }
-
-    companion object {
-        /**
-         * Id to identity READ_CONTACTS permission request.
-         */
-        private val REQUEST_READ_CONTACTS = 0
-        private val DUMMY_CREDENTIALS = arrayOf("tairoroberto@gmail.com:123456", "teste@gmail.com.com:123456")
-    }
-
     private fun isLoggedIn(): Boolean {
         val accesstoken = AccessToken.getCurrentAccessToken()
         return !(accesstoken == null || accesstoken.permissions.isEmpty())
@@ -363,11 +251,23 @@ class LoginActivity : AppCompatActivity() {
             userPicture.profileId = null
             userName.text = "Welcome"
         }
+        showProgress(false)
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent) {
         super.onActivityResult(requestCode, resultCode, data)
-        callbackManager?.onActivityResult(requestCode, resultCode, data)
+
+        when (requestCode) {
+            REQUEST_CODE_PICK_WHATSAPP -> if (resultCode == RESULT_OK) {
+                if (intent.hasExtra("contact")) {
+                    val address = intent.getStringExtra("contact")
+                    Log.d("LOG", "The selected Whatsapp address is: " + address)
+                }
+            }
+            else -> {
+                callbackManager?.onActivityResult(requestCode, resultCode, data)
+            }
+        }
     }
 
     private fun hasPublishPermission(): Boolean {
