@@ -8,4 +8,19 @@
         <item name="colorAccent">@color/colorAccent</item>
     </style>
 
+    <color name="usersettings_fragment_connected_text_color">#FFFFFF</color>
+    <color name="usersettings_fragment_connected_shadow_color">#000000</color>
+    <color name="usersettings_fragment_not_connected_text_color">#A6AED7</color>
+    <dimen name="usersettings_fragment_profile_picture_width">64dp</dimen>
+    <dimen name="usersettings_fragment_profile_picture_height">64dp</dimen>
+
+    <style name="AppTheme.NoActionBar">
+        <item name="windowActionBar">false</item>
+        <item name="windowNoTitle">true</item>
+    </style>
+
+    <style name="AppTheme.AppBarOverlay" parent="ThemeOverlay.AppCompat.Dark.ActionBar" />
+
+    <style name="AppTheme.PopupOverlay" parent="ThemeOverlay.AppCompat.Light" />
+
 </resources>
